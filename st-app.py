@@ -3,8 +3,15 @@ from PIL import Image, ImageDraw, ImageFont
 from math import ceil, atan2, pi
 
 # === Utility functions ===
-def crop_to_aspect(img: Image.Image, target_aspect=3/4):
+def crop_to_aspect(img: Image.Image, target_aspect=3/4, max_size=1024):
+    # Resize large images first to prevent memory issues
     w, h = img.size
+    if max(w, h) > max_size:
+        ratio = max_size / max(w, h)
+        new_w, new_h = int(w * ratio), int(h * ratio)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        w, h = new_w, new_h
+    
     aspect = w / h
     if aspect > target_aspect:
         new_w = int(h * target_aspect)
@@ -294,6 +301,11 @@ uploaded_files = st.file_uploader(
     "Choose face images", type=["jpg", "jpeg", "png"], accept_multiple_files=True
 )
 
+if uploaded_files:
+    st.info(f"Uploaded {len(uploaded_files)} images. Large images will be automatically resized to prevent memory issues.")
+    if len(uploaded_files) > 30:
+        st.warning("⚠️ Many images detected. Processing may take longer or fail on limited memory systems.")
+
 # Canvas selection
 canvas_option = st.selectbox(
     "Choose canvas size",
@@ -331,29 +343,75 @@ emblem_file = st.file_uploader("Upload emblem (optional)", type=["jpg", "jpeg", 
 if st.button("Generate Composite"):
     if not uploaded_files:
         st.error("Please upload some face images first.")
+    elif len(uploaded_files) > 50:
+        st.error("Please upload no more than 50 images to prevent memory issues.")
     else:
-        # Load images as PIL objects
-        faces = [Image.open(f).convert("RGB") for f in uploaded_files]
-        emblem_img = Image.open(emblem_file).convert("RGBA") if emblem_file else None
-        composite = create_composite(
-            faces,
-            canvas_w=int(canvas_w),
-            canvas_h=int(canvas_h),
-            reserved_rows=int(reserved_rows),
-            reserved_cols=int(reserved_cols),
-            school_name=school_name.strip(),
-            emblem_img=emblem_img,
-            center_offset_r=center_offset_r,
-            center_offset_c=center_offset_c,
-        )
-        st.image(composite, caption="Composite")
-        # Offer download
-        from io import BytesIO
-        buf = BytesIO()
-        composite.save(buf, format="PNG")
-        st.download_button(
-            label="Download composite",
-            data=buf.getvalue(),
-            file_name="class_composite.png",
-            mime="image/png",
-        )
+        try:
+            # Show progress
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.text("Loading images...")
+            progress_bar.progress(0.1)
+            
+            # Load images as PIL objects with error handling
+            faces = []
+            for i, f in enumerate(uploaded_files):
+                try:
+                    img = Image.open(f).convert("RGB")
+                    faces.append(img)
+                except Exception as e:
+                    st.warning(f"Could not load image {f.name}: {e}")
+                    continue
+            
+            if not faces:
+                st.error("No valid images could be loaded.")
+                st.stop()
+            
+            progress_bar.progress(0.3)
+            status_text.text("Processing emblem...")
+            
+            emblem_img = None
+            if emblem_file:
+                try:
+                    emblem_img = Image.open(emblem_file).convert("RGBA")
+                except Exception as e:
+                    st.warning(f"Could not load emblem: {e}")
+            
+            progress_bar.progress(0.5)
+            status_text.text("Generating composite...")
+            
+            composite = create_composite(
+                faces,
+                canvas_w=int(canvas_w),
+                canvas_h=int(canvas_h),
+                reserved_rows=int(reserved_rows),
+                reserved_cols=int(reserved_cols),
+                school_name=school_name.strip(),
+                emblem_img=emblem_img,
+                center_offset_r=center_offset_r,
+                center_offset_c=center_offset_c,
+            )
+            
+            progress_bar.progress(0.9)
+            status_text.text("Displaying result...")
+            
+            st.image(composite, caption="Composite")
+            
+            progress_bar.progress(1.0)
+            status_text.text("Complete!")
+            
+            # Offer download
+            from io import BytesIO
+            buf = BytesIO()
+            composite.save(buf, format="PNG")
+            st.download_button(
+                label="Download composite",
+                data=buf.getvalue(),
+                file_name="class_composite.png",
+                mime="image/png",
+            )
+            
+        except Exception as e:
+            st.error(f"An error occurred while generating the composite: {str(e)}")
+            st.error("This might be due to memory limitations. Try using fewer or smaller images.")
